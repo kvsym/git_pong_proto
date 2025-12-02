@@ -1,0 +1,11 @@
+syntax = "proto3";
+
+package telemetry;
+
+message Position {
+    float x_m = 1;
+    float y_m = 2;
+    float z_m = 3;
+    uint64 seq = 4;
+    string source = 5;
+}
