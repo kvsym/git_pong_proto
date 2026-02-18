@@ -2,16 +2,15 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 
-import board
-import busio
-from adafruit_bno08x.i2c import BNO08X_I2C
-from adafruit_bno08x import BNO_REPORT_ROTATION_VECTOR
-
 from executor.constants import IMU_POLL_SEC, BRIDGE_PRINT_SEC
 from executor.shared_state import SharedState
 
 
 def imu_worker(stop: Event, state: SharedState) -> None:
+    import board
+    import busio
+    from adafruit_bno08x.i2c import BNO08X_I2C
+    from adafruit_bno08x import BNO_REPORT_ROTATION_VECTOR
     """
     Background worker function for IMU.
 

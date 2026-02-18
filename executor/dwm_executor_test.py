@@ -1,9 +1,6 @@
 import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
-from serial import Serial
-
-import dwm1001
 
 from executor.constants import (
     DWM_DEFAULT_PORT, DWM_BAUD, DWM_SERIAL_TIMEOUT_SEC,
@@ -13,6 +10,9 @@ from executor.shared_state import SharedState
 
 
 def dwm_worker(stop: Event, state: SharedState, port: str) -> None:
+    from serial import Serial
+
+    import dwm1001
     """
     Background worker for DWM1001 (or similar serial sensor).
 

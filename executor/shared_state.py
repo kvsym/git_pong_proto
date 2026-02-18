@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from threading import Lock
 from typing import Optional, Tuple, Any
+import time
 
 # Quaternion type alias (IMU orientation)
 Quat = Tuple[float, float, float, float]
@@ -16,7 +17,10 @@ class SharedState:
     """
     _lock: Lock
     imu_quat: Optional[Quat] = None
+    imu_ts: float = 0.0
+
     dwm_pos: Optional[Any] = None
+    dwm_ts: float = 0.0
 
     def set_imu_quat(self, quat: Quat) -> None:
         """
@@ -27,6 +31,7 @@ class SharedState:
         """
         with self._lock:
             self.imu_quat = quat
+            self.imu_ts = time.time()
 
     def set_dwm_pos(self, pos: Any) -> None:
         """
@@ -34,6 +39,7 @@ class SharedState:
         """
         with self._lock:
             self.dwm_pos = pos
+            self.dwm_ts = time.time()
 
     def snapshot(self) -> dict:
         """
@@ -44,5 +50,7 @@ class SharedState:
         with self._lock:
             return {
                 "imu_quat": self.imu_quat,
+                "imu_ts": self.imu_ts,
                 "dwm_pos": self.dwm_pos,
+                "dwm_ts": self.dwm_ts,
             }
