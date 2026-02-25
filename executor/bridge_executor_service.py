@@ -1,144 +1,223 @@
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future
 from threading import Event, Lock
-from typing import Optional
+from typing import Dict, Optional
+from dataclasses import dataclass
 import zenoh
 import json
+import uuid
 
 from executor.constants import (
     ZENOH_ENDPOINT,
-    ZENOH_KEY_IMU,
-    ZENOH_KEY_DWM,
     PUBLISH_PERIOD_SEC,
     DWM_DEFAULT_PORT,
 )
 
 from executor.shared_state import SharedState
+from executor.message_types import MessageType
 from executor.imu_executor_test import imu_worker
 from executor.dwm_executor_test import dwm_worker
 
+@dataclass
+class BridgeHandle:
+    """
+    Tracks one running bridge publisher task.
+    
+    - outbound_topic: where we publish in Zenoh
+    - message_type: what data we publish from SharedState
+    - stop: event to request shutdown
+    - future: the executor task future (for debugging / status)
+    """
+    outbound_topic: str
+    message_type: MessageType
+    stop: Event
+    future: Future
 
-class BridgeService:
+class BridgeManager:
     """
-    Bridge:
-    - Owns SharedState ("blackboard)
-    - Owns Zenoh session
-    - Starts sensor workers (IMU, DWM)
-    - Runs a publish loop that reads SharedState and publishes to Zenoh topics
+    Owns:
+    - One Zenoh session (shared by all bridges)
+    - One ThreadPoolExecutor (shared by all sensors+bridges)
+    - One SharedState blackboard
+
+    Provides:
+    - start_sensors(): submit sensor tasks
+    - create_bridge(outbound_topic, message_type): submit publisher task
+    - close_bridge(bridge_id): stop just that publisher task
+    - shutdown(): stop everything cleanly
     """
-    def __init__(self, dwm_port: str = DWM_DEFAULT_PORT, enable_dwm: bool = True, enable_imu: bool = True):
-        self.stop = Event()
+
+    def __init__(self, *, max_workers: int = 6):
         self.state = SharedState(_lock=Lock())
-        self.dwm_port = dwm_port
-        self.enable_dwm = enable_dwm
-        self.enable_imu = enable_imu
 
-        self.executor: Optional[ThreadPoolExecutor] = None
-        self.z: Optional[zenoh.Session] = None
+        self._executor = ThreadPoolExecutor(max_workers=max_workers)
+        self._zenoh = self._open_zenoh_session()
 
-    def create_bridge(self) -> None:
-        """
-        Creates the bridge:
-        - Opens Zenoh Session
-        - Starts worker threads and publisher loop in a ThreadPoolExecutor
-        """
-        print(f"[BRIDGE] Opening Zenoh session to {ZENOH_ENDPOINT}...")
+        self._sensor_stop = Event()
+        self._sensors_started = False
+
+        self._bridges: Dict[str, BridgeHandle] = {}
+    
+    def _open_zenoh_session(self) -> zenoh.Session:
+        """Create and return a Zenoh session used by all bridges."""
+        print(f"[MANAGER] Opening Zenoh session to {ZENOH_ENDPOINT}...")
         config = zenoh.Config()
         config.insert_json5("connect/endpoints", f'["{ZENOH_ENDPOINT}"]')
-        self.z = zenoh.open(config)
-        print("[BRIDGE] Zenoh session opened")
-
-        self.executor = ThreadPoolExecutor(max_workers=4)
-
-        # Start sensors
-        if self.enable_imu:
-            self.executor.submit(imu_worker, self.stop, self.state)
-        if self.enable_dwm:
-            self.executor.submit(dwm_worker, self.stop, self.state, self.dwm_port)
-
-        # Start publisher loop
-        self.executor.submit(self._publisher_loop)
-
-        print("[BRIDGE] Bridge created (sensors + publisher running)")
-
-    def close_bridge(self) -> None:
+        z = zenoh.open(config)
+        print("[MANAGER] Zenoh session opened")
+        return z
+    
+    def shutdown(self) -> None:
         """
-        Closes the bridge:
-        - Signals stop to all workers
-        - Shuts down executor
-        - Closes Zenoh session
+        Stop all bridges + sensors and release resources:
+        - signal sensor stop
+        - signal all bridge stops
+        - wait for tasks to end
+        - close zenoh session
+        - shutdown executor
         """
-        print("[BRIDGE] Closing...")
-        self.stop.set()
+        print("[MANAGER] Shutting down...")
 
-        if self.executor:
-            self.executor.shutdown(wait=True)
+        # Stop sensors
+        self._sensor_stop.set()
 
-        if self.z:
-            try:
-                self.z.close()
-            except Exception:
-                pass
+        # Stop all bridges
+        for bridge_id in list(self._bridges.keys()):
+            self.close_bridge(bridge_id)
 
-        print("[BRIDGE] Closed")
-    def _publisher_loop(self) -> None:
+        # Close Zenoh
+        try:
+            self._zenoh.close()
+        except Exception:
+            pass
+
+        # Executor
+        self._executor.shutdown(wait=True)
+
+        print("[MANAGER] Shutdown complete")
+    
+    def start_sensors(self, *, enable_imu: bool = True, enable_dwm: bool = True, dwm_port: str = DWM_DEFAULT_PORT) -> None:
+        if self._sensors_started:
+            return
+
+        if enable_imu:
+            self._executor.submit(imu_worker, self._sensor_stop, self.state)
+
+        if enable_dwm:
+            self._executor.submit(dwm_worker, self._sensor_stop, self.state, dwm_port)
+
+        self._sensors_started = True
+        print("[MANAGER] Sensors started")
+    
+    def create_bridge(self, outbound_topic: str, message_type: MessageType) -> str:
         """
-        Periodic publish loop:
-        - Reads SharedState snapshot
-        - Publishes IMU and DWM values (if present) to Zenoh
-        - Runs at PUBLISH_PERIOD_SEC (0.1s in your diagram)
-        """
-        assert self.z is not None
+        Create a publishing bridge by submitting a publisher task to the executor.
 
-        print(f"[BRIDGE] Publisher loop started (period={PUBLISH_PERIOD_SEC}s)")
-        while not self.stop.is_set():
+        Returns a bridge_id used later to close it.
+        """
+        bridge_id = uuid.uuid4().hex
+        stop = Event()
+
+        fut = self._executor.submit(
+            self._bridge_publisher_loop,
+            stop,
+            outbound_topic,
+            message_type,
+        )
+
+        self._bridges[bridge_id] = BridgeHandle(
+            outbound_topic=outbound_topic,
+            message_type=message_type,
+            stop=stop,
+            future=fut,
+        )
+
+        print(f"[MANAGER] Bridge created id={bridge_id} type={message_type.value} topic={outbound_topic}")
+        return bridge_id
+
+    def close_bridge(self, bridge_id: str) -> None:
+        """
+        Stop a single bridge:
+        - signal its stop event
+        - optionally wait a moment for it to end (non-blocking is fine too)
+        - remove it from registry
+        """
+        handle = self._bridges.get(bridge_id)
+        if not handle:
+            print(f"[MANAGER] close_bridge: no such id={bridge_id}")
+            return
+
+        print(f"[MANAGER] Closing bridge id={bridge_id} ...")
+        handle.stop.set()
+
+        # Optional: wait briefly or just drop it (future will end on its own)
+        # handle.future.result(timeout=2.0)  # uncomment if you want strict join
+
+        del self._bridges[bridge_id]
+        print(f"[MANAGER] Bridge closed id={bridge_id}")
+
+    def _bridge_publisher_loop(self, stop: Event, outbound_topic: str, message_type: MessageType) -> None:
+        """
+        Worker for one bridge.
+
+        It:
+        - wakes up every BRIDGE_PUBLISH_PERIOD_SEC
+        - reads SharedState snapshot
+        - encodes the data for message_type
+        - publishes to outbound_topic
+        - exits when stop is set
+        """
+        print(f"[BRIDGE] Start type={message_type.value} topic={outbound_topic} period={BRIDGE_PUBLISH_PERIOD_SEC}s")
+
+        while not stop.is_set():
             snap = self.state.snapshot()
 
-            # Publish IMU
-            imu = snap["imu_quat"]
-            if imu is not None:
-                payload = json.dumps({
-                    "ts": snap["imu_ts"],
-                    "quat": {"i": imu[0], "j": imu[1], "k": imu[2], "w": imu[3]},
-                }).encode()
-                self.z.put(ZENOH_KEY_IMU, payload)
-
-            # Publish DWM
-            pos = snap["dwm_pos"]
-            if pos is not None:
-                data = {"ts": snap["dwm_ts"]}
-                for name in ("x_m", "y_m", "z_m", "x", "y", "z"):
-                    if hasattr(pos, name):
-                        data[name] = float(getattr(pos, name))
-                if len(data) == 1:
-                    data["raw"] = str(pos)
-
-                self.z.put(ZENOH_KEY_DWM, json.dumps(data).encode())
+            payload = self._encode_payload(message_type, snap)
+            if payload is not None:
+                try:
+                    self._zenoh.put(outbound_topic, payload)
+                except Exception as e:
+                    print(f"[BRIDGE] publish error topic={outbound_topic}: {e}")
 
             time.sleep(PUBLISH_PERIOD_SEC)
 
-        print("[BRIDGE] Publisher loop stopped")
+        print(f"[BRIDGE] Stop type={message_type.value} topic={outbound_topic}")
+    
+    def _encode_payload(self, message_type: MessageType, snap: dict) -> Optional[bytes]:
+        """
+        Convert a SharedState snapshot into bytes suitable for Zenoh.
 
-    # def start(self) -> None:
-    #     """
-    #     Launch all sensor workers.
+        Right now: JSON bytes (easy for debugging).
+        Later: swap to protobuf without changing bridge logic.
+        """
+        if message_type == MessageType.IMU:
+            quat = snap["imu_quat"]
+            if quat is None:
+                return None
+            data = {
+                "type": "imu",
+                "ts": snap["imu_ts"],
+                "quat": {"i": quat[0], "j": quat[1], "k": quat[2], "w": quat[3]},
+            }
+            return json.dumps(data).encode()
 
-    #     Each worker runs in its own executor thread.
-    #     """
-    #     self.executor.submit(imu_worker, self.stop, self.state)
-    #     self.executor.submit(dwm_worker, self.stop, self.state, DWM_DEFAULT_PORT)
+        if message_type == MessageType.DWM:
+            pos = snap["dwm_pos"]
+            if pos is None:
+                return None
 
-    # def snapshot(self) -> dict:
-    #     """
-    #     Return a thread-safe snapshot of all sensor data.
+            data = {"type": "dwm", "ts": snap["dwm_ts"]}
 
-    #     Used by:
-    #     - Tasks
-    #     - (Zenoh)
-    #     - (Logging)
-    #     """
-    #     return self.state.snapshot()
+            # try common fields, else include raw
+            found = False
+            for name in ("x_m", "y_m", "z_m", "x", "y", "z"):
+                if hasattr(pos, name):
+                    data[name] = float(getattr(pos, name))
+                    found = True
+            if not found:
+                data["raw"] = str(pos)
 
-    # def shutdown(self) -> None:
-    #     self.stop.set()
-    #     self.executor.shutdown(wait=True)
+            return json.dumps(data).encode()
+
+        # Unknown message type
+        return None

@@ -1,28 +1,52 @@
+# main.py
+import time
 import argparse
-from executor.bridge_executor_service import Bridge
-from executor.constants import DWM_DEFAULT_PORT
+
+from executor.bridge_executor_service import BridgeManager
+from message_types import MessageType
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dwm-port", default=DWM_DEFAULT_PORT)
-    parser.add_argument("--no-dwm", action="store_true")
     parser.add_argument("--no-imu", action="store_true")
+    parser.add_argument("--no-dwm", action="store_true")
+
+    # Create bridge specs from CLI (repeatable)
+    # Example:
+    #   --bridge human/imu imu --bridge human/dwm dwm
+    parser.add_argument(
+        "--bridge",
+        action="append",
+        nargs=2,
+        metavar=("TOPIC", "TYPE"),
+        help="Bridge spec: TOPIC TYPE  (TYPE in {imu,dwm})",
+    )
     args = parser.parse_args()
 
-    bridge = Bridge(
-        dwm_port=args.dwm_port,
-        enable_dwm=not args.no_dwm,
-        enable_imu=not args.no_imu,
-    )
+    mgr = BridgeManager(max_workers=6)
+    mgr.start_sensors(enable_imu=not args.no_imu, enable_dwm=not args.no_dwm)
 
-    bridge.create_bridge()
+    # Create requested bridges
+    bridge_ids = []
+    if args.bridge:
+        for topic, typ in args.bridge:
+            msg_type = MessageType(typ)  # validates enum
+            bridge_ids.append(mgr.create_bridge(topic, msg_type))
+    else:
+        # default bridges if none specified
+        bridge_ids.append(mgr.create_bridge("human/imu", MessageType.IMU))
+        bridge_ids.append(mgr.create_bridge("human/dwm", MessageType.DWM))
 
     try:
-        # main thread just blocks until Ctrl+C
+        # keep running
         while True:
-            pass
+            time.sleep(1.0)
     except KeyboardInterrupt:
-        bridge.close_bridge()
+        # Close bridges (optional; shutdown() already closes them)
+        for bid in bridge_ids:
+            mgr.close_bridge(bid)
+        mgr.shutdown()
+
 
 if __name__ == "__main__":
     main()
