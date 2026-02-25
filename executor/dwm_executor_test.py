@@ -2,11 +2,11 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 
-from executor.constants import (
+from constants import (
     DWM_DEFAULT_PORT, DWM_BAUD, DWM_SERIAL_TIMEOUT_SEC,
-    DWM_POLL_SEC, BRIDGE_PRINT_SEC
+    DWM_POLL_SEC, PUBLISH_PERIOD_SEC
 )
-from executor.shared_state import SharedState
+from shared_state import SharedState
 
 
 def dwm_worker(stop: Event, state: SharedState, port: str) -> None:
@@ -50,7 +50,7 @@ def main() -> None:
             while True:
                 snap = state.snapshot()
                 print("[MAIN] Latest position:", snap["dwm_pos"])
-                time.sleep(BRIDGE_PRINT_SEC)
+                time.sleep(PUBLISH_PERIOD_SEC)
         except KeyboardInterrupt:
             print("\n[MAIN] Stopping...")
             stop.set()

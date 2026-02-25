@@ -2,8 +2,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from threading import Event, Lock
 
-from executor.constants import IMU_POLL_SEC, BRIDGE_PRINT_SEC
-from executor.shared_state import SharedState
+from constants import IMU_POLL_SEC, PUBLISH_PERIOD_SEC
+from shared_state import SharedState
 
 
 def imu_worker(stop: Event, state: SharedState) -> None:
@@ -48,7 +48,7 @@ def main() -> None:
             while True:
                 snap = state.snapshot()
                 print("[MAIN] Latest quat:", snap["imu_quat"])
-                time.sleep(BRIDGE_PRINT_SEC)
+                time.sleep(PUBLISH_PERIOD_SEC)
         except KeyboardInterrupt:
             print("\n[MAIN] Stopping...")
             stop.set()

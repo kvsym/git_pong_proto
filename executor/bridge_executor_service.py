@@ -7,16 +7,16 @@ import zenoh
 import json
 import uuid
 
-from executor.constants import (
+from constants import (
     ZENOH_ENDPOINT,
     PUBLISH_PERIOD_SEC,
     DWM_DEFAULT_PORT,
 )
 
-from executor.shared_state import SharedState
-from executor.message_types import MessageType
-from executor.imu_executor_test import imu_worker
-from executor.dwm_executor_test import dwm_worker
+from shared_state import SharedState
+from message_types import MessageType
+from imu_executor_test import imu_worker
+from dwm_executor_test import dwm_worker
 
 @dataclass
 class BridgeHandle:
@@ -167,7 +167,7 @@ class BridgeManager:
         - publishes to outbound_topic
         - exits when stop is set
         """
-        print(f"[BRIDGE] Start type={message_type.value} topic={outbound_topic} period={BRIDGE_PUBLISH_PERIOD_SEC}s")
+        print(f"[BRIDGE] Start type={message_type.value} topic={outbound_topic} period={PUBLISH_PERIOD_SEC}s")
 
         while not stop.is_set():
             snap = self.state.snapshot()

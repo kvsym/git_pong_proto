@@ -2,7 +2,7 @@
 import time
 import argparse
 
-from executor.bridge_executor_service import BridgeManager
+from bridge_executor_service import BridgeManager
 from message_types import MessageType
 
 
@@ -40,6 +40,8 @@ def main():
     try:
         # keep running
         while True:
+            snap = mgr.state.snapshot()
+            print(snap)
             time.sleep(1.0)
     except KeyboardInterrupt:
         # Close bridges (optional; shutdown() already closes them)
