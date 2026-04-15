@@ -11,6 +11,7 @@ DWM_SERIAL_TIMEOUT_SEC = 1.0
 
 # ---- Zenoh ----
 ZENOH_ENDPOINT = "tcp/localhost:7447"
+PI_IP = "172.29.254.77"
 
 # ---- IMU thresholds (example for task logic) ----
 STABLE_W_THRESHOLD = 0.50

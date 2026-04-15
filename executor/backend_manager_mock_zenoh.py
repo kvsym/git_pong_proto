@@ -167,7 +167,7 @@ def main() -> None:
         enable_imu=not args.no_imu,
         enable_dwm=not args.no_dwm,
         dwm_port=args.dwm_port,
-        zenoh_endpoint=ZENOH_ENDPOINT,
+        zenoh_endpoint=args.zenoh_endpoint,
     )
 
     backend.start()
