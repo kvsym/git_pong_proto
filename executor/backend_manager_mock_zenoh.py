@@ -8,6 +8,7 @@ import zenoh
 
 import utils as aou
 from bridge_executor_service import BridgeManager
+from constants import ZENOH_ENDPOINT
 
 logging.basicConfig(level=logging.INFO)
 
@@ -166,7 +167,7 @@ def main() -> None:
         enable_imu=not args.no_imu,
         enable_dwm=not args.no_dwm,
         dwm_port=args.dwm_port,
-        zenoh_endpoint=args.zenoh_endpoint,
+        zenoh_endpoint=ZENOH_ENDPOINT,
     )
 
     backend.start()
