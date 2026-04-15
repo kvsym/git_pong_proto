@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package hrt_interfaces.rtr;
+
+import "hrt_interfaces/core/key_value.proto";
+
+enum ConstructType {
+   SEQ = 0;
+   PAR = 1;
+   CYCLIC = 2;
+}
+
+message Condition {
+   string name = 1;
+   Task src = 2;
+   Task dest = 3;
+   repeated hrt_interfaces.core.KeyValue params = 4;
+}
+
+message ControlConstruct {
+   ConstructType cons_type = 1;
+   repeated Task components = 2;
+   repeated Condition conditions = 3;
+} 
+
+message Task {
+   string task_name = 1;
+   repeated hrt_interfaces.core.KeyValue params = 2;
+   ControlConstruct ctrl_construct = 3;
+}
+
+message TaskAttempt {
+   string agent_name = 1;
+   Task task = 2;
+}
+
+/*
+  Standard reply for service-style query/reply operations.
+*/
+message ServiceReply {
+  // Unix timestamp in milliseconds
+  int64 timestamp = 1;
+
+  // Whether the request succeeded
+  bool is_successful = 2;
+
+  // Informational message for logs / human debugging
+  string message = 3;
+
+  // Error details if the request failed; empty on success
+  string error = 4;
+}
+
